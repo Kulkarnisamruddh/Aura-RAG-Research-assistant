@@ -20,3 +20,11 @@ A high-performance, full-stack Research Assistant that uses Retrieval-Augmented 
 2. Configure your `.env` with Supabase, Groq, and OpenRouter keys.
 3. Run the setup SQL in `setup.sql` in your Supabase dashboard.
 4. Start the full stack: `npm run dev:full`
+
+---
+
+## 👨‍💻 About the Developer
+**Samruddh Kulkarni**
+Final year AI&DS student at MIT, Chhatrapati Sambhajinagar.
+Passionate about building secure, scalable, and agentic AI systems.
+

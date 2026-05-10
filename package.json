@@ -1,7 +1,9 @@
 {
   "name": "rag-assistant",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Aura: A high-performance, secure agentic RAG assistant for researchers.",
+  "author": "Samruddh Kulkarni (Final year AI&DS student, MIT Chhatrapati Sambhajinagar)",
   "type": "module",
   "scripts": {
     "dev": "vite",
