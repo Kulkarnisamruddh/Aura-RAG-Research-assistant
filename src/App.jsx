@@ -4,7 +4,7 @@ import { pipeline } from '@xenova/transformers';
 import * as pdfjs from 'pdfjs-dist';
 
 // Set up PDF worker
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 export default function App({ session }) {
   const [documents, setDocuments] = useState([]);
