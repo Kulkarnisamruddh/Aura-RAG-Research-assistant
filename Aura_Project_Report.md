@@ -25,7 +25,7 @@ Aura is a full-stack **Retrieval-Augmented Generation (RAG)** application. It al
 Instead of using expensive APIs like OpenAI for embeddings, Aura generates them **on the backend** using a local quantized model.
 - **Model:** `Xenova/all-MiniLM-L6-v2`.
 - **Dimensions:** 384.
-- **Trade-off:** This saves significant cost and reduces external API dependencies while maintaining high semantic accuracy for English text.
+- **Optimization (Edge Computing):** To support deployment on limited-resource servers (like Render Free Tier), Aura uses **Browser-Side Embeddings**. The AI model is downloaded and executed in the user's browser via Web Workers. This ensures the backend remains lightweight, avoids memory crashes, and scales infinitely with the number of users.
 
 ### B. Vector Search & Storage
 Document chunks are stored in a PostgreSQL table with a `vector` column type.
