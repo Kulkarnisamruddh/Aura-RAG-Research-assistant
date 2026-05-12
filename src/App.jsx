@@ -11,8 +11,15 @@ export default function App({ session }) {
   const [messages, setMessages]   = useState([]);
   const [loading, setLoading]     = useState(false);
   const [parsing, setParsing]     = useState(false);
-  const extractorRef              = useRef(null);
+  const [progress, setProgress]   = useState('');
+  const workerRef                 = useRef(null);
   const inputRef                  = useRef(null);
+
+  // Initialize Worker
+  useEffect(() => {
+    workerRef.current = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+    return () => workerRef.current?.terminate();
+  }, []);
 
   // Fetch existing documents on load
   useEffect(() => {
@@ -62,16 +69,7 @@ export default function App({ session }) {
     }
   }
 
-  // --- HELPER: BROWSER-SIDE RAG LOGIC ---
-  async function getExtractor() {
-    if (!extractorRef.current) {
-      extractorRef.current = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        quantized: true,
-      });
-    }
-    return extractorRef.current;
-  }
-
+  // --- HELPER: BROWSER-SIDE RAG LOGIC (Now in Worker) ---
   function chunkText(text) {
     const CHUNK_SIZE = 300;
     const words = text.split(/\s+/).filter(Boolean);
@@ -104,10 +102,9 @@ export default function App({ session }) {
     const files = Array.from(e.target.files);
     if (files.length === 0) return;
     setParsing(true);
+    setProgress('Preparing files...');
 
     try {
-      const extractor = await getExtractor();
-
       for (const file of files) {
         // 1. Extract Text
         const text = await extractText(file);
@@ -116,17 +113,24 @@ export default function App({ session }) {
         // 2. Chunk Text
         const chunks = chunkText(text);
         
-        // 3. Generate Embeddings for each chunk
-        const processedChunks = [];
-        for (const chunk of chunks) {
-          const output = await extractor(chunk, { pooling: 'mean', normalize: true });
-          processedChunks.push({
-            content: chunk,
-            embedding: Array.from(output.data)
-          });
-        }
+        // 3. Generate Embeddings via Worker
+        const processedChunks = await new Promise((resolve, reject) => {
+          workerRef.current.onmessage = (e) => {
+            if (e.data.type === 'progress') {
+              setProgress(`Embedding: ${e.data.current}/${e.data.total}`);
+            } else if (e.data.type === 'done') {
+              resolve(e.data.chunks);
+            } else if (e.data.type === 'status') {
+              setProgress(e.data.message);
+            } else if (e.data.type === 'error') {
+              reject(new Error(e.data.error));
+            }
+          };
+          workerRef.current.postMessage({ type: 'embed_chunks', chunks });
+        });
 
         // 4. Send to server to save
+        setProgress('Saving to cloud...');
         const res = await fetch(import.meta.env.VITE_API_URL.replace('/chat', '/upload'), {
           method: 'POST',
           headers: {
@@ -154,6 +158,7 @@ export default function App({ session }) {
     }
 
     setParsing(false);
+    setProgress('');
     e.target.value = '';
   }
 
@@ -185,9 +190,13 @@ export default function App({ session }) {
     setMessages(history);
 
     try {
-      const extractor = await getExtractor();
-      const output = await extractor(query, { pooling: 'mean', normalize: true });
-      const queryEmbedding = Array.from(output.data);
+      const queryEmbedding = await new Promise((resolve, reject) => {
+        workerRef.current.onmessage = (e) => {
+          if (e.data.type === 'query_done') resolve(e.data.embedding);
+          else if (e.data.type === 'error') reject(new Error(e.data.error));
+        };
+        workerRef.current.postMessage({ type: 'embed_query', text: query });
+      });
 
       const response = await fetch(import.meta.env.VITE_API_URL, {
         method: 'POST',
@@ -338,7 +347,7 @@ export default function App({ session }) {
           <input type="file" multiple accept=".txt,.md,.pdf" onChange={handleUpload} style={{ display:'none' }} disabled={parsing} />
           {parsing ? (
             <div style={{ animation: 'pulse 1.5s infinite' }}>
-              ⏳ <span style={{ fontWeight:500 }}>Embedding Chunks...</span>
+              ⏳ <span style={{ fontWeight:500 }}>{progress || 'Thinking...'}</span>
               <style>{`@keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }`}</style>
             </div>
           ) : (
