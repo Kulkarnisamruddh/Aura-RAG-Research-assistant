@@ -1,11 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { supabase } from './supabaseClient';
+import { pipeline } from '@xenova/transformers';
+import * as pdfjs from 'pdfjs-dist';
+
+// Set up PDF worker
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 export default function App({ session }) {
   const [documents, setDocuments] = useState([]);
   const [messages, setMessages]   = useState([]);
   const [loading, setLoading]     = useState(false);
   const [parsing, setParsing]     = useState(false);
+  const extractorRef              = useRef(null);
   const inputRef                  = useRef(null);
 
   // Fetch existing documents on load
@@ -56,22 +62,82 @@ export default function App({ session }) {
     }
   }
 
+  // --- HELPER: BROWSER-SIDE RAG LOGIC ---
+  async function getExtractor() {
+    if (!extractorRef.current) {
+      extractorRef.current = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        quantized: true,
+      });
+    }
+    return extractorRef.current;
+  }
+
+  function chunkText(text) {
+    const CHUNK_SIZE = 300;
+    const words = text.split(/\s+/).filter(Boolean);
+    const result = [];
+    const step = Math.floor(CHUNK_SIZE * 0.8);
+    for (let i = 0; i < words.length; i += step) {
+      const chunk = words.slice(i, i + CHUNK_SIZE).join(' ');
+      if (chunk.trim().length > 20) result.push(chunk);
+    }
+    return result;
+  }
+
+  async function extractText(file) {
+    if (file.name.endsWith('.pdf')) {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      let text = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(item => item.str).join(' ') + '\n';
+      }
+      return text;
+    } else {
+      return await file.text();
+    }
+  }
+
   async function handleUpload(e) {
     const files = Array.from(e.target.files);
+    if (files.length === 0) return;
     setParsing(true);
 
-    for (const file of files) {
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('userId', session.user.id);
+    try {
+      const extractor = await getExtractor();
 
+      for (const file of files) {
+        // 1. Extract Text
+        const text = await extractText(file);
+        if (!text.trim()) continue;
+
+        // 2. Chunk Text
+        const chunks = chunkText(text);
+        
+        // 3. Generate Embeddings for each chunk
+        const processedChunks = [];
+        for (const chunk of chunks) {
+          const output = await extractor(chunk, { pooling: 'mean', normalize: true });
+          processedChunks.push({
+            content: chunk,
+            embedding: Array.from(output.data)
+          });
+        }
+
+        // 4. Send to server to save
         const res = await fetch(import.meta.env.VITE_API_URL.replace('/chat', '/upload'), {
           method: 'POST',
           headers: {
+            'Content-Type': 'application/json',
             'Authorization': `Bearer ${session.access_token}`
           },
-          body: formData,
+          body: JSON.stringify({ 
+            userId: session.user.id, 
+            fileName: file.name, 
+            chunks: processedChunks 
+          }),
         });
 
         if (!res.ok) {
@@ -80,11 +146,11 @@ export default function App({ session }) {
         }
 
         const data = await res.json();
-        
         setDocuments(prev => [...prev, { id: data.id, name: data.name, chunkCount: data.chunks }]);
-      } catch (err) {
-        alert(`❌ Failed to read "${file.name}": ${err.message}`);
       }
+    } catch (err) {
+      console.error(err);
+      alert(`❌ Error processing files: ${err.message}`);
     }
 
     setParsing(false);
@@ -119,13 +185,21 @@ export default function App({ session }) {
     setMessages(history);
 
     try {
+      const extractor = await getExtractor();
+      const output = await extractor(query, { pooling: 'mean', normalize: true });
+      const queryEmbedding = Array.from(output.data);
+
       const response = await fetch(import.meta.env.VITE_API_URL, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ messages: history, userId: session.user.id }),
+        body: JSON.stringify({ 
+          messages: history, 
+          userId: session.user.id,
+          queryEmbedding: queryEmbedding
+        }),
       });
 
       if (!response.ok) throw new Error('Server error');

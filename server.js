@@ -5,7 +5,6 @@ import multer from 'multer';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse-new');
-import { pipeline } from '@xenova/transformers';
 import dotenv from 'dotenv';
 import Groq from 'groq-sdk';
 
@@ -55,16 +54,8 @@ function getUserSupabase(req) {
   });
 }
 
-// Setup local model for embeddings
-let extractor;
-async function getExtractor() {
-  if (!extractor) {
-    extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      quantized: true,
-    });
-  }
-  return extractor;
-}
+// --- RAG CHUNKING LOGIC ---
+// (Now handled on frontend to save server RAM)
 
 // Multer for memory storage
 const upload = multer({ storage: multer.memoryStorage() });
@@ -87,59 +78,34 @@ function chunkText(text) {
 app.get('/', (req, res) => res.send('🚀 RAG Assistant Backend is running! Access the frontend at http://localhost:5173'));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.post('/api/upload', upload.single('file'), async (req, res) => {
+app.post('/api/upload', async (req, res) => {
   try {
-    const { userId } = req.body;
-    if (!req.file || !userId) return res.status(400).json({ error: 'File and userId required' });
+    const { userId, fileName, chunks } = req.body; // Expecting pre-computed chunks with embeddings
+    if (!userId || !fileName || !chunks) return res.status(400).json({ error: 'Missing data' });
 
-    console.log(`Processing ${req.file.originalname} for user ${userId}`);
+    console.log(`Saving ${chunks.length} pre-computed chunks for ${fileName}`);
 
-    // Create authenticated client
     const userSupabase = getUserSupabase(req);
 
-    // 1. Extract Text
-    let fullText = '';
-    if (req.file.originalname.endsWith('.pdf')) {
-      const data = await pdfParse(req.file.buffer);
-      fullText = data.text;
-    } else {
-      fullText = req.file.buffer.toString('utf-8');
-    }
-
-    if (!fullText.trim()) throw new Error('File appears to be empty or unreadable.');
-
-    // 2. Save Document to Supabase using the user's identity
     const { data: docData, error: docError } = await userSupabase
       .from('documents')
-      .insert([{ user_id: userId, file_name: req.file.originalname, file_path: 'local' }])
+      .insert([{ user_id: userId, file_name: fileName, file_path: 'local' }])
       .select('id')
       .single();
 
     if (docError) throw docError;
     const documentId = docData.id;
 
-    // 3. Chunk & Embed
-    const chunks = chunkText(fullText);
-    const generateEmbeddings = await getExtractor();
-    
-    console.log(`Generated ${chunks.length} chunks. Creating embeddings...`);
+    const records = chunks.map(c => ({
+      document_id: documentId,
+      content: c.content,
+      embedding: c.embedding
+    }));
 
-    const records = [];
-    for (const chunk of chunks) {
-      const output = await generateEmbeddings(chunk, { pooling: 'mean', normalize: true });
-      const embedding = Array.from(output.data);
-      records.push({
-        document_id: documentId,
-        content: chunk,
-        embedding: embedding
-      });
-    }
-
-    // 4. Save Chunks to Vector DB
     const { error: chunkError } = await userSupabase.from('document_chunks').insert(records);
     if (chunkError) throw chunkError;
 
-    res.json({ success: true, chunks: records.length, name: req.file.originalname, id: documentId });
+    res.json({ success: true, chunks: records.length, name: fileName, id: documentId });
   } catch (err) {
     console.error('Upload Error:', err.message);
     res.status(500).json({ error: err.message });
@@ -148,19 +114,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, userId } = req.body;
-    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    const { messages, userId, queryEmbedding } = req.body; // Receive query embedding from frontend
+    if (!userId || !queryEmbedding) return res.status(400).json({ error: 'userId and queryEmbedding are required' });
 
     const userMessage = messages[messages.length - 1].content;
-    console.log(`Searching for: "${userMessage}"`);
+    console.log(`Searching with pre-computed embedding for: "${userMessage}"`);
 
-    // Create authenticated client
     const userSupabase = getUserSupabase(req);
-
-    // 1. Generate embedding for user query
-    const generateEmbeddings = await getExtractor();
-    const output = await generateEmbeddings(userMessage, { pooling: 'mean', normalize: true });
-    const queryEmbedding = Array.from(output.data);
 
     // 2. Search Supabase vector database
     const { data: searchResults, error: searchError } = await userSupabase.rpc('match_document_chunks', {
