@@ -177,11 +177,23 @@ app.post('/api/chat', async (req, res) => {
       context = searchResults.map((r, i) => `[Source ${i + 1}: ${r.file_name}]\n${r.content}`).join('\n\n---\n\n');
       sources = searchResults.map(r => ({ docName: r.file_name, text: r.content, score: r.similarity }));
     } else {
-      // Early exit if no relevant chunks found to save tokens
-      return res.json({ 
-        content: "I cannot find relevant information in the uploaded documents to answer your question.", 
-        sources: [] 
-      });
+      // Early exit if no relevant chunks found to save tokens.
+      // Must use SSE format because the client expects text/event-stream.
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const noContextMsg = "I cannot find relevant information in the uploaded documents to answer your question.";
+      res.write(`data: ${JSON.stringify({ content: noContextMsg })}\n\n`);
+      res.write(`data: [DONE]\n\n`);
+      res.end();
+
+      // Save messages to DB to preserve chat history
+      await userSupabase.from('chat_messages').insert([
+        { user_id: userId, role: 'user', content: userMessage },
+        { user_id: userId, role: 'assistant', content: noContextMsg, sources: [] }
+      ]);
+      return;
     }
 
     const systemPrompt = `You are an expert research assistant. When the user asks a question, use the provided CONTEXT. If it's just a greeting (like "hi"), respond politely. If the user asks a specific question and the answer is not in the context, say "I cannot find the answer in the uploaded documents." Cite your sources using [Source N].\n\nCONTEXT:\n\n${context || 'No documents found.'}`;
