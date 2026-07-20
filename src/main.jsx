@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import './index.css'
 import App from './App.jsx'
 import Auth from './Auth.jsx'
+import ResetPassword from './ResetPassword.jsx'
 import { supabase } from './supabaseClient'
 
 function Root() {
@@ -33,6 +34,7 @@ function Root() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={!session ? <Auth /> : <Navigate to="/" />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/" element={session ? <App session={session} /> : <Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>

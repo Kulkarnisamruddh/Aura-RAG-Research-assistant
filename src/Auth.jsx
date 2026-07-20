@@ -5,7 +5,7 @@ export default function Auth() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [authMode, setAuthMode] = useState('signin'); // 'signin', 'signup', 'forgot_password'
   const [error, setError] = useState(null);
   const [msg, setMsg] = useState(null);
 
@@ -16,10 +16,16 @@ export default function Auth() {
     setMsg(null);
 
     try {
-      if (isSignUp) {
+      if (authMode === 'signup') {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         setMsg('Success! Check your email for the confirmation link.');
+      } else if (authMode === 'forgot_password') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+        if (error) throw error;
+        setMsg('Password reset instructions sent to your email.');
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -47,7 +53,9 @@ export default function Auth() {
     <div style={s.root}>
       <div style={s.card}>
         <div style={{ textAlign: 'center', fontSize: 48, marginBottom: -10 }}>🔬</div>
-        <h2 style={s.title}>{isSignUp ? 'Create an Account' : 'Welcome Back'}</h2>
+        <h2 style={s.title}>
+          {authMode === 'signup' ? 'Create an Account' : authMode === 'forgot_password' ? 'Reset Password' : 'Welcome Back'}
+        </h2>
         <p style={s.subtitle}>RAG Research Assistant</p>
 
         <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -62,23 +70,38 @@ export default function Auth() {
             style={s.input} 
             required 
           />
-          <input 
-            type="password" 
-            placeholder="Password" 
-            value={password} 
-            onChange={(e) => setPassword(e.target.value)} 
-            style={s.input} 
-            required 
-          />
+          {authMode !== 'forgot_password' && (
+            <input 
+              type="password" 
+              placeholder="Password" 
+              value={password} 
+              onChange={(e) => setPassword(e.target.value)} 
+              style={s.input} 
+              required 
+            />
+          )}
           
           <button type="submit" style={s.button} disabled={loading}>
-            {loading ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Sign In')}
+            {loading ? 'Processing...' : (authMode === 'signup' ? 'Sign Up' : authMode === 'forgot_password' ? 'Send Reset Link' : 'Sign In')}
           </button>
         </form>
 
-        <button type="button" onClick={() => setIsSignUp(!isSignUp)} style={s.toggle}>
-          {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {authMode === 'signin' ? (
+            <>
+              <button type="button" onClick={() => setAuthMode('signup')} style={s.toggle}>
+                Don't have an account? Sign up
+              </button>
+              <button type="button" onClick={() => setAuthMode('forgot_password')} style={s.toggle}>
+                Forgot password?
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setAuthMode('signin')} style={s.toggle}>
+              Back to sign in
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

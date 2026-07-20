@@ -7,14 +7,25 @@ const require = createRequire(import.meta.url);
 const pdfParse = require('pdf-parse-new');
 import dotenv from 'dotenv';
 import Groq from 'groq-sdk';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
 const app = express();
-app.use(cors()); // Allow all origins for deployment
+// Allow all origins for local development to prevent 'Failed to fetch' errors
+app.use(cors());
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Rate limiter: Max 50 requests per 15 minutes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes' }
+});
+
+app.use('/api/', apiLimiter);
 
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -82,16 +93,35 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.post('/api/upload', async (req, res) => {
   try {
-    const { userId, fileName, chunks } = req.body; // Expecting pre-computed chunks with embeddings
-    if (!userId || !fileName || !chunks) return res.status(400).json({ error: 'Missing data' });
+    const { fileName, chunks, fileHash } = req.body; // Removed userId from body trust
+    if (!fileName || !chunks) return res.status(400).json({ error: 'Missing data' });
 
     console.log(`Saving ${chunks.length} pre-computed chunks for ${fileName}`);
 
     const userSupabase = getUserSupabase(req);
+    
+    // Securely extract userId from the verified JWT
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    if (authError || !user) return res.status(401).json({ error: 'Unauthorized request' });
+    const userId = user.id;
+
+    // Check for duplicate document via hash
+    if (fileHash) {
+      const { data: existingDoc } = await userSupabase
+        .from('documents')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('file_hash', fileHash)
+        .single();
+      
+      if (existingDoc) {
+        return res.status(409).json({ error: 'This document has already been uploaded.' });
+      }
+    }
 
     const { data: docData, error: docError } = await userSupabase
       .from('documents')
-      .insert([{ user_id: userId, file_name: fileName, file_path: 'local' }])
+      .insert([{ user_id: userId, file_name: fileName, file_path: 'local', file_hash: fileHash }])
       .select('id')
       .single();
 
@@ -116,20 +146,26 @@ app.post('/api/upload', async (req, res) => {
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, userId, queryEmbedding } = req.body; // Receive query embedding from frontend
-    if (!userId || !queryEmbedding) return res.status(400).json({ error: 'userId and queryEmbedding are required' });
+    const { messages, queryEmbedding, documentIds } = req.body; // Removed userId from body trust
+    if (!queryEmbedding) return res.status(400).json({ error: 'queryEmbedding is required' });
 
     const userMessage = messages[messages.length - 1].content;
     console.log(`Searching with pre-computed embedding for: "${userMessage}"`);
 
     const userSupabase = getUserSupabase(req);
 
+    // Securely extract userId from the verified JWT
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    if (authError || !user) return res.status(401).json({ error: 'Unauthorized request' });
+    const userId = user.id;
+
     // 2. Search Supabase vector database
     const { data: searchResults, error: searchError } = await userSupabase.rpc('match_document_chunks', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.3,
+      match_threshold: 0.5,
       match_count: 4,
-      p_user_id: userId
+      p_user_id: userId,
+      filter_document_ids: documentIds && documentIds.length > 0 ? documentIds : null
     });
 
     if (searchError) throw searchError;
@@ -140,14 +176,25 @@ app.post('/api/chat', async (req, res) => {
     if (searchResults && searchResults.length > 0) {
       context = searchResults.map((r, i) => `[Source ${i + 1}: ${r.file_name}]\n${r.content}`).join('\n\n---\n\n');
       sources = searchResults.map(r => ({ docName: r.file_name, text: r.content, score: r.similarity }));
+    } else {
+      // Early exit if no relevant chunks found to save tokens
+      return res.json({ 
+        content: "I cannot find relevant information in the uploaded documents to answer your question.", 
+        sources: [] 
+      });
     }
 
     const systemPrompt = `You are an expert research assistant. When the user asks a question, use the provided CONTEXT. If it's just a greeting (like "hi"), respond politely. If the user asks a specific question and the answer is not in the context, say "I cannot find the answer in the uploaded documents." Cite your sources using [Source N].\n\nCONTEXT:\n\n${context || 'No documents found.'}`;
 
     // Deep-strip all non-standard properties (role + content ONLY) before sending to OpenRouter
-    const cleanMessages = messages
+    let cleanMessages = messages
       .filter(m => m.role && m.content)
       .map(m => ({ role: String(m.role), content: String(m.content) }));
+
+    // TRUNCATE HISTORY: Keep only the last 6 messages to save tokens and avoid context limits
+    if (cleanMessages.length > 6) {
+      cleanMessages = cleanMessages.slice(-6);
+    }
 
     console.log('Sending to OpenRouter:', JSON.stringify(cleanMessages.map(m => ({ role: m.role, len: m.content.length }))));
 
@@ -169,7 +216,12 @@ app.post('/api/chat', async (req, res) => {
     res.end();
   } catch (err) {
     console.error('Chat Error:', err.message);
-    res.status(500).json({ error: err.message });
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
