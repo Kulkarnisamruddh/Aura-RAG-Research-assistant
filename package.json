@@ -12,7 +12,8 @@
     "dev:full": "concurrently \"npm run dev\" \"npm run server\"",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "eval": "node eval/run_evals.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.3",

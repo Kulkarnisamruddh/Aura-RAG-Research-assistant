@@ -38,7 +38,11 @@ export function useAuraState(session) {
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-      setMessages(data || []);
+      const formatted = (data || []).map(m => ({
+        ...m,
+        unbacked: m.sources?.some(s => s.is_unbacked) || false
+      }));
+      setMessages(formatted);
     } catch (err) {
       console.error('Error fetching messages:', err);
     }
@@ -277,6 +281,12 @@ export function useAuraState(session) {
                 setMessages(prev => {
                   const last = prev[prev.length - 1];
                   return [...prev.slice(0, -1), { ...last, content: assistantContent }];
+                });
+              }
+              if (data.guardrail?.unbacked) {
+                setMessages(prev => {
+                  const last = prev[prev.length - 1];
+                  return [...prev.slice(0, -1), { ...last, unbacked: true }];
                 });
               }
             } catch (e) { /* partial chunk */ }

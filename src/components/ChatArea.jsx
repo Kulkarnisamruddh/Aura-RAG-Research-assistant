@@ -51,6 +51,25 @@ export default function ChatArea({
                 )}
               </div>
               
+              {msg.unbacked && (
+                <div style={{ 
+                  marginTop: 8, 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 8, 
+                  fontSize: 12, 
+                  background: 'rgba(245, 158, 11, 0.12)', 
+                  border: '1px solid rgba(245, 158, 11, 0.35)', 
+                  color: '#fbbf24', 
+                  padding: '6px 12px', 
+                  borderRadius: 8, 
+                  maxWidth: '80%' 
+                }}>
+                  <span>⚠️</span>
+                  <span><strong>Guardrail Alert:</strong> This answer was generated without direct grounding citations in your uploaded sources and may be unverified.</span>
+                </div>
+              )}
+
               {msg.sources && msg.sources.length > 0 && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: '80%' }}>
                   {msg.sources.map((s, idx) => (

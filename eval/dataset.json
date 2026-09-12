@@ -1,0 +1,37 @@
+[
+  {
+    "id": "eval-01",
+    "category": "factual_retrieval",
+    "question": "What embedding model is used in Aura and how does it reduce server RAM?",
+    "sampleContext": "[Source 1: architecture.md]\nAura uses all-MiniLM-L6-v2 via ONNX Runtime Web directly in the client browser inside a dedicated Web Worker thread. By executing embeddings client-side, the server offloads vector computation, reducing server memory consumption by avoiding in-memory transformer models on Node.js.",
+    "groundTruth": "Aura uses all-MiniLM-L6-v2 running in a Web Worker in the browser, offloading embedding computations and saving server RAM."
+  },
+  {
+    "id": "eval-02",
+    "category": "security_and_limits",
+    "question": "How is user authentication validated and what rate limits are enforced?",
+    "sampleContext": "[Source 1: security.md]\nAura validates requests using Supabase JWT tokens via userSupabase.auth.getUser() on the backend instead of trusting client request bodies. It enforces an Express rate limit of 50 requests per 15 minutes per IP address on all API endpoints.",
+    "groundTruth": "Authentication is verified server-side using Supabase JWT tokens, and an express-rate-limit of 50 requests per 15 minutes is enforced."
+  },
+  {
+    "id": "eval-03",
+    "category": "database_optimization",
+    "question": "What vector index is used in Supabase pgvector and why was it added?",
+    "sampleContext": "[Source 1: setup.sql]\nAn HNSW (Hierarchical Navigable Small World) index is created on document_chunks table with cosine distance operations to convert sequential full-table scans O(N) into sub-linear O(log N) approximate nearest neighbor searches.",
+    "groundTruth": "An HNSW index on the embedding vector column is used to enable fast O(log N) vector searches instead of full table scans."
+  },
+  {
+    "id": "eval-04",
+    "category": "negative_refusal",
+    "question": "What was the closing stock price of Tesla on January 15th 2024?",
+    "sampleContext": "[Source 1: deep_learning.pdf]\nConvolutional neural networks are specialized for spatial data processing such as computer vision and image classification.",
+    "groundTruth": "The model should state that it cannot find the answer in the uploaded documents."
+  },
+  {
+    "id": "eval-05",
+    "category": "document_management",
+    "question": "How does Aura prevent duplicate file uploads and what is the file size limit?",
+    "sampleContext": "[Source 1: upload_docs.md]\nFiles are hashed using client-side Web Crypto SHA-256 before uploading. If the hash matches an existing document for the user, a 409 Conflict is returned. Individual uploads are restricted to a maximum size of 20MB.",
+    "groundTruth": "Aura uses client-side SHA-256 hashing to reject duplicates with 409 Conflict, and enforces a 20MB file size limit."
+  }
+]

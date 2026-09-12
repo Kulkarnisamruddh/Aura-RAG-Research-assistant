@@ -8,6 +8,12 @@ const pdfParse = require('pdf-parse-new');
 import dotenv from 'dotenv';
 import Groq from 'groq-sdk';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -30,7 +36,7 @@ app.use('/api/', apiLimiter);
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const groq = new Groq({ apiKey: GROQ_API_KEY });
-const LLM_MODEL = 'llama-3.3-70b-versatile';
+const LLM_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 
 async function chatWithGroq(systemPrompt, messages, res) {
   const stream = await groq.chat.completions.create({
@@ -196,7 +202,16 @@ app.post('/api/chat', async (req, res) => {
       return;
     }
 
-    const systemPrompt = `You are an expert research assistant. When the user asks a question, use the provided CONTEXT. If it's just a greeting (like "hi"), respond politely. If the user asks a specific question and the answer is not in the context, say "I cannot find the answer in the uploaded documents." Cite your sources using [Source N].\n\nCONTEXT:\n\n${context || 'No documents found.'}`;
+    const systemPrompt = `You are an expert research assistant. Answer the user's question using ONLY the provided CONTEXT below.
+Strict Guardrail Rules:
+1. Every factual statement or claim MUST cite the corresponding source, e.g. [Source 1], [Source 2].
+2. If the answer cannot be found in the provided CONTEXT, say exactly: "I cannot find the answer in the uploaded documents."
+3. Do NOT make up facts or answer from external knowledge.
+4. If it's a polite greeting (like "hi"), respond politely without citations.
+
+CONTEXT:
+
+${context || 'No documents found.'}`;
 
     // Deep-strip all non-standard properties (role + content ONLY) before sending to OpenRouter
     let cleanMessages = messages
@@ -218,10 +233,26 @@ app.post('/api/chat', async (req, res) => {
     // 5. Generate answer with Groq (Streaming)
     const answer = await chatWithGroq(systemPrompt, cleanMessages, res);
 
+    // 5.1 Guardrail Evaluation: Check if the model answered without citing retrieved sources
+    const isGreeting = /^(hi|hello|hey|good morning|good evening|greetings)[\s.!,]*$/i.test(userMessage.trim());
+    const saysCannotFind = /cannot find the answer/i.test(answer) || /not found in the uploaded documents/i.test(answer);
+    const hasSourceCitation = /\[Source\s*\d+\]/i.test(answer);
+
+    const isUnbacked = !isGreeting && !saysCannotFind && !hasSourceCitation && context.length > 0;
+
+    if (isUnbacked) {
+      console.warn(`⚠️ [Guardrail Triggered]: Answer without source citations detected for query: "${userMessage}"`);
+      res.write(`data: ${JSON.stringify({ guardrail: { unbacked: true } })}\n\n`);
+    }
+
     // 6. Save messages to DB after stream completes
+    const savedSources = isUnbacked 
+      ? [{ docName: 'Guardrail Warning', text: 'This answer did not cite uploaded source chunks and may contain unverified claims.', score: 0, is_unbacked: true }, ...sources]
+      : sources;
+
     await userSupabase.from('chat_messages').insert([
       { user_id: userId, role: 'user', content: userMessage },
-      { user_id: userId, role: 'assistant', content: answer, sources: sources }
+      { user_id: userId, role: 'assistant', content: answer, sources: savedSources }
     ]);
 
     res.write(`data: [DONE]\n\n`);
@@ -238,6 +269,17 @@ app.post('/api/chat', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
+
+// Serve static frontend assets in production/docker if dist/ exists
+const distPath = path.join(__dirname, 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Backend running securely on port ${PORT}`);
 });
