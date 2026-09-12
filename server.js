@@ -166,15 +166,18 @@ app.post('/api/chat', async (req, res) => {
     const userId = user.id;
 
     // 2. Search Supabase vector database
+    // all-MiniLM-L6-v2 semantic similarity for natural Q&A typically ranges between 0.20 - 0.45.
     const { data: searchResults, error: searchError } = await userSupabase.rpc('match_document_chunks', {
       query_embedding: queryEmbedding,
-      match_threshold: 0.5,
-      match_count: 4,
+      match_threshold: 0.20,
+      match_count: 5,
       p_user_id: userId,
       filter_document_ids: documentIds && documentIds.length > 0 ? documentIds : null
     });
 
     if (searchError) throw searchError;
+
+    console.log(`Vector search retrieved ${searchResults?.length || 0} chunks (top score: ${searchResults?.[0]?.similarity ? (searchResults[0].similarity * 100).toFixed(1) + '%' : 'None'})`);
 
     // 3. Build context for the LLM
     let context = '';
